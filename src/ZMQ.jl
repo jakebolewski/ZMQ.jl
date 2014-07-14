@@ -1,31 +1,27 @@
 # Support for ZeroMQ, a network and interprocess communication library
-
 module ZMQ
 
 include("../deps/deps.jl")
 
-import Base: convert, ref, get, bytestring, length, size, stride, similar, getindex, setindex!, fd, wait, close, connect
+import Base: convert, get, bytestring, length, size, stride, 
+             similar, getindex, setindex!, fd, wait, close, connect
 
 # Julia 0.2 does not define these (avoid warning for import)
-if isdefined(:bind)
-    import Base.bind
-end
-if isdefined(:send)
-    import Base.send
-end
-if isdefined(:recv)
-    import Base.recv
-end
+isdefined(:bind) && import Base.bind
+isdefined(:send) && import Base.send
+isdefined(:recv) && import Base.recv
 
 export bind, send, recv
 
 export 
-    #Types
-    StateError,Context,Socket,Message,
-    #functions
+    # Types
+    StateError, Context, Socket, Message,
+    # Functions
     set, subscribe, unsubscribe,
-    #Constants
-    IO_THREADS,MAX_SOCKETS,PAIR,PUB,SUB,REQ,REP,ROUTER,DEALER,PULL,PUSH,XPUB,XPUB,XREQ,XREP,UPSTREAM,DOWNSTREAM,MORE,MORE,SNDMORE,POLLIN,POLLOUT,POLLERR,STREAMER,FORWARDER,QUEUE
+    # Constants
+    IO_THREADS, MAX_SOCKETS, PAIR, PUB, SUB, REQ, REP, ROUTER, DEALER, PULL, PUSH,
+    XPUB, XREQ, XREP, UPSTREAM, DOWNSTREAM, MORE, SNDMORE, POLLIN, POLLOUT, POLLERR,
+    STREAMER, FORWARDER, QUEUE
 
 # A server will report most errors to the client over a Socket, but
 # errors in ZMQ state can't be reported because the socket may be
@@ -34,21 +30,17 @@ export
 type StateError <: Exception
     msg::String
 end
+
 show(io, thiserr::StateError) = print(io, "ZMQ: ", thiserr.msg)
 
 # Basic functions
 function jl_zmq_error_str()
     errno = ccall((:zmq_errno, zmq), Cint, ())
-    c_strerror = ccall ((:zmq_strerror, zmq), Ptr{Uint8}, (Cint,), errno)
-    if c_strerror != C_NULL
-        strerror = bytestring(c_strerror)
-        return strerror
-    else 
-        return "Unknown error"
-    end
+    errstr = ccall ((:zmq_strerror, zmq), Ptr{Uint8}, (Cint,), errno)
+    return errstr != C_NULL ? bytestring(errstr) : "Unknown error"
 end
 
-const version = let major = zeros(Cint, 1), minor = zeros(Cint, 1), patch = zeros(Cint, 1)
+const version = let major = major = Cint[0], minor = Cint[0], patch = Cint[0]
     ccall((:zmq_version, zmq), Void, (Ptr{Cint}, Ptr{Cint}, Ptr{Cint}), major, minor, patch)
     VersionNumber(major[1], minor[1], patch[1])
 end
@@ -57,21 +49,19 @@ end
 macro v2only(ex)
     version.major == 2 ? esc(ex) : :nothing
 end
+
 macro v3only(ex)
     version.major >= 3 ? esc(ex) : :nothing
 end
-
 
 ## Sockets ##
 type Socket
     data::Ptr{Void}
 
     # ctx should be ::Context, but forward type references are not allowed
-    function Socket(ctx, typ::Integer)
-        p = ccall((:zmq_socket, zmq), Ptr{Void},  (Ptr{Void}, Cint), ctx.data, typ)
-        if p == C_NULL
-            throw(StateError(jl_zmq_error_str()))
-        end
+    Socket(ctx, typ::Integer) = begin
+        p = ccall((:zmq_socket, zmq), Ptr{Void}, (Ptr{Void}, Cint), ctx.data, typ)
+        p == C_NULL && throw(StateError(jl_zmq_error_str()))
         socket = new(p)
         finalizer(socket, close)
         push!(ctx.sockets, socket)
@@ -81,10 +71,8 @@ end
 
 function close(socket::Socket)
     if socket.data != C_NULL
-        rc = ccall((:zmq_close, zmq), Cint,  (Ptr{Void},), socket.data)
-        if rc != 0
-            throw(StateError(jl_zmq_error_str()))
-        end
+        rc = ccall((:zmq_close, zmq), Cint, (Ptr{Void},), socket.data)
+        rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
         socket.data = C_NULL
     end
 end
@@ -100,13 +88,11 @@ type Context
     # close them before finalizing (otherwise zmq_term will hang)
     sockets::Vector{Socket}
 
-    function Context(n::Integer)
-        @v2only p = ccall((:zmq_init, zmq), Ptr{Void},  (Cint,), n)
-        @v3only p = ccall((:zmq_ctx_new, zmq), Ptr{Void},  ())
-        if p == C_NULL
-            throw(StateError(jl_zmq_error_str()))
-        end
-        zctx = new(p, Array(Socket,0))
+    Context(n::Integer) = begin
+        @v2only p = ccall((:zmq_init, zmq), Ptr{Void}, (Cint,), n)
+        @v3only p = ccall((:zmq_ctx_new, zmq), Ptr{Void}, ())
+        p == C_NULL && throw(StateError(jl_zmq_error_str()))
+        zctx = new(p, Socket[])
         finalizer(zctx, close)
         return zctx
     end
@@ -115,213 +101,212 @@ Context() = Context(1)
 
 function close(ctx::Context)
     if ctx.data != C_NULL # don't close twice!
-        for s in ctx.sockets
-            close(s)
-        end
-        @v2only rc = ccall((:zmq_term, zmq), Cint,  (Ptr{Void},), ctx.data)
-        @v3only rc = ccall((:zmq_ctx_destroy, zmq), Cint,  (Ptr{Void},), ctx.data)
-        if rc != 0
-            throw(StateError(jl_zmq_error_str()))
-        end
+        map(close, ctx.sockets)
+        @v2only rc = ccall((:zmq_term, zmq), Cint, (Ptr{Void},), ctx.data)
+        @v3only rc = ccall((:zmq_ctx_destroy, zmq), Cint, (Ptr{Void},), ctx.data)
+        rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
         ctx.data = C_NULL
     end
 end
+
 term(ctx::Context) = close(ctx)
 
 @v3only begin
-function get(ctx::Context, option::Integer)
-    val = ccall((:zmq_ctx_get, zmq), Cint, (Ptr{Void}, Cint), ctx.data, option)
-    if val < 0
-        throw(StateError(jl_zmq_error_str()))
+    function get(ctx::Context, option::Integer)
+        val = ccall((:zmq_ctx_get, zmq), Cint, (Ptr{Void}, Cint), ctx.data, option)
+        val < zero(Cint) && throw(StateError(jl_zmq_error_str()))
+        return val
     end
-    return val
-end
 
-function set(ctx::Context, option::Integer, value::Integer)
-    rc = ccall((:zmq_ctx_set, zmq), Cint, (Ptr{Void}, Cint, Cint), ctx.data, option, value)
-    if rc != 0
-        throw(StateError(jl_zmq_error_str()))
+    function set(ctx::Context, option::Integer, value::Integer)
+        rc = ccall((:zmq_ctx_set, zmq), Cint, (Ptr{Void}, Cint, Cint), ctx.data, option, value)
+        if rc != zero(Cint)
+            throw(StateError(jl_zmq_error_str()))
+        end
     end
-end
-end # end v3only
+end 
 
 
 # Getting and setting socket options
 # Socket options of integer type
-let u64p = zeros(Uint64, 1), i64p = zeros(Int64, 1), ip = zeros(Cint, 1), u32p = zeros(Uint32, 1), sz = zeros(Uint, 1), 
-    pp = zeros(Ptr{Void},1)
-opslist = {
-    (:set_affinity,                :get_affinity,                 4, u64p)
-    (:set_type,                    :get_type,                    16,   ip)
-    (:set_linger,                  :get_linger,                  17,   ip)
-    (:set_reconnect_ivl,           :get_reconnect_ivl,           18,   ip)
-    (:set_backlog,                 :get_backlog,                 19,   ip)
-    (:set_reconnect_ivl_max,       :get_reconnect_ivl_max,       21,   ip)
-  }
+let u64p = Uint64[0], i64p = Int64[0], ip = Cint[0], u32p = Uint32[0], sz = Uint[0], pp = Ptr{Void}[0]
+    opslist = {
+        (:set_affinity,                :get_affinity,                 4, u64p)
+        (:set_type,                    :get_type,                    16,   ip)
+        (:set_linger,                  :get_linger,                  17,   ip)
+        (:set_reconnect_ivl,           :get_reconnect_ivl,           18,   ip)
+        (:set_backlog,                 :get_backlog,                 19,   ip)
+        (:set_reconnect_ivl_max,       :get_reconnect_ivl_max,       21,   ip)
+      }
 
-@unix_only opslist = vcat(opslist, (nothing,     :get_fd,        14,   ip))
-@windows_only opslist = vcat(opslist, (nothing,  :get_fd,        14,   pp))
+    @unix_only    opslist = vcat(opslist, (nothing,  :get_fd,        14,   ip))
+    @windows_only opslist = vcat(opslist, (nothing,  :get_fd,        14,   pp))
 
-if version.major == 2
-    opslist = vcat(opslist, {
-    (:set_hwm,                     :get_hwm,                      1, u64p)
-    (:set_swap,                    :get_swap,                     3, i64p)
-    (:set_rate,                    :get_rate,                     8, i64p)
-    (:set_recovery_ivl,            :get_recovery_ivl,             9, i64p)
-    (:_zmq_setsockopt_mcast_loop,  :_zmq_getsockopt_mcast_loop,  10, i64p)
-    (:set_sndbuf,                  :get_sndbuf,                  11, u64p)
-    (:set_rcvbuf,                  :get_rcvbuf,                  12, u64p)
-    (nothing,                      :_zmq_getsockopt_rcvmore,     13, i64p)
-    (nothing,                      :get_events,                  15, u32p)
-    (:set_recovery_ivl_msec,       :get_recovery_ivl_msec,       20, i64p)
-    })
-else
-    opslist = vcat(opslist, {
-    (:set_rate,                    :get_rate,                     8,   ip)
-    (:set_recovery_ivl,            :get_recovery_ivl,             9,   ip)
-    (:set_sndbuf,                  :get_sndbuf,                  11,   ip)
-    (:set_rcvbuf,                  :get_rcvbuf,                  12,   ip)
-    (nothing,                      :_zmq_getsockopt_rcvmore,     13,   ip)
-    (nothing,                      :get_events,                  15,   ip)
-    (:set_maxmsgsize,              :get_maxmsgsize,              22,   ip)
-    (:set_sndhwm,                  :get_sndhwm,                  23,   ip)
-    (:set_rcvhwm,                  :get_rcvhwm,                  24,   ip)
-    (:set_multicast_hops,          :get_multicast_hops,          25,   ip)
-    (:set_ipv4only,                :get_ipv4only,                31,   ip)
-    (:set_tcp_keepalive,           :get_tcp_keepalive,           34,   ip)
-    (:set_tcp_keepalive_idle,      :get_tcp_keepalive_idle,      35,   ip)
-    (:set_tcp_keepalive_cnt,       :get_tcp_keepalive_cnt,       36,   ip)
-    (:set_tcp_keepalive_intvl,     :get_tcp_keepalive_intvl,     37,   ip)
-    })
-end
-if version > v"2.1"
-    opslist = vcat(opslist, {
-    (:set_rcvtimeo,                :get_rcvtimeo,                27,   ip)
-    (:set_sndtimeo,                :get_sndtimeo,                28,   ip)
-    })
-end
-    
-for (fset, fget, k, p) in opslist
-    if fset != nothing
-        @eval global ($fset)
-        @eval function ($fset)(socket::Socket, option_val::Integer)
-            ($p)[1] = option_val
-            rc = ccall((:zmq_setsockopt, zmq), Cint,
-                       (Ptr{Void}, Cint, Ptr{Void}, Uint),
-                       socket.data, $k, $p, sizeof(eltype($p)))
-            if rc != 0
-                throw(StateError(jl_zmq_error_str()))
-            end
-        end
+    if version.major == 2
+        opslist = vcat(opslist, {
+            (:set_hwm,                     :get_hwm,                      1, u64p)
+            (:set_swap,                    :get_swap,                     3, i64p)
+            (:set_rate,                    :get_rate,                     8, i64p)
+            (:set_recovery_ivl,            :get_recovery_ivl,             9, i64p)
+            (:_zmq_setsockopt_mcast_loop,  :_zmq_getsockopt_mcast_loop,  10, i64p)
+            (:set_sndbuf,                  :get_sndbuf,                  11, u64p)
+            (:set_rcvbuf,                  :get_rcvbuf,                  12, u64p)
+            (nothing,                      :_zmq_getsockopt_rcvmore,     13, i64p)
+            (nothing,                      :get_events,                  15, u32p)
+            (:set_recovery_ivl_msec,       :get_recovery_ivl_msec,       20, i64p)
+        })
+    else
+        opslist = vcat(opslist, {
+            (:set_rate,                    :get_rate,                     8,   ip)
+            (:set_recovery_ivl,            :get_recovery_ivl,             9,   ip)
+            (:set_sndbuf,                  :get_sndbuf,                  11,   ip)
+            (:set_rcvbuf,                  :get_rcvbuf,                  12,   ip)
+            (nothing,                      :_zmq_getsockopt_rcvmore,     13,   ip)
+            (nothing,                      :get_events,                  15,   ip)
+            (:set_maxmsgsize,              :get_maxmsgsize,              22,   ip)
+            (:set_sndhwm,                  :get_sndhwm,                  23,   ip)
+            (:set_rcvhwm,                  :get_rcvhwm,                  24,   ip)
+            (:set_multicast_hops,          :get_multicast_hops,          25,   ip)
+            (:set_ipv4only,                :get_ipv4only,                31,   ip)
+            (:set_tcp_keepalive,           :get_tcp_keepalive,           34,   ip)
+            (:set_tcp_keepalive_idle,      :get_tcp_keepalive_idle,      35,   ip)
+            (:set_tcp_keepalive_cnt,       :get_tcp_keepalive_cnt,       36,   ip)
+            (:set_tcp_keepalive_intvl,     :get_tcp_keepalive_intvl,     37,   ip)
+        })
     end
-    if fget != nothing
-        @eval global($fget)
-        @eval function ($fget)(socket::Socket)
-            ($sz)[1] = sizeof(eltype($p))
-            rc = ccall((:zmq_getsockopt, zmq), Cint,
-                       (Ptr{Void}, Cint, Ptr{Void}, Ptr{Uint}),
-                       socket.data, $k, $p, $sz)
-            if rc != 0
-                throw(StateError(jl_zmq_error_str()))
+
+    if version > v"2.1"
+        opslist = vcat(opslist, {
+            (:set_rcvtimeo,                :get_rcvtimeo,                27,   ip)
+            (:set_sndtimeo,                :get_sndtimeo,                28,   ip)
+        })
+    end
+    
+    for (fset, fget, k, p) in opslist
+        if fset != nothing
+            @eval global $fset
+            @eval function ($fset)(socket::Socket, option_val::Integer)
+                ($p)[1] = option_val
+                rc = ccall((:zmq_setsockopt, zmq), Cint,
+                           (Ptr{Void}, Cint, Ptr{Void}, Uint),
+                           socket.data, $k, $p, sizeof(eltype($p)))
+                if rc != zero(Cint)
+                    throw(StateError(jl_zmq_error_str()))
+                end
             end
-            return int(($p)[1])
         end
-    end        
+
+        if fget != nothing
+            @eval global $fget
+            @eval function ($fget)(socket::Socket)
+                ($sz)[1] = sizeof(eltype($p))
+                rc = ccall((:zmq_getsockopt, zmq), Cint,
+                           (Ptr{Void}, Cint, Ptr{Void}, Ptr{Uint}),
+                           socket.data, $k, $p, $sz)
+                rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
+                return int(($p)[1])
+            end
+        end        
+    end
+    
+    # For some functions, the publicly-visible versions should require & return boolean
+    if version.major == 2
+        global set_mcast_loop
+        set_mcast_loop(socket::Socket, val::Bool) = _zmq_setsockopt_mcast_loop(socket, val)
+        
+        global get_mcast_loop
+        get_mcast_loop(socket::Socket) = bool(_zmq_getsockopt_mcast_loop(socket))
+    end
 end
-# For some functions, the publicly-visible versions should require &
-# return boolean
-if version.major == 2
-    global set_mcast_loop
-    set_mcast_loop(socket::Socket, val::Bool) = _zmq_setsockopt_mcast_loop(socket, val)
-    global get_mcast_loop
-    get_mcast_loop(socket::Socket) = bool(_zmq_getsockopt_mcast_loop(socket))
-end
-end  # let
+
 # More functions with boolean prototypes
 get_rcvmore(socket::Socket) = bool(_zmq_getsockopt_rcvmore(socket))
+
 # And a convenience function
 ismore(socket::Socket) = get_rcvmore(socket)
 
 # subscribe/unsubscribe options take an arbitrary byte array
-for (f,k) in ((:subscribe,6), (:unsubscribe,7))
+for (f,k) in ((:subscribe, 6), (:unsubscribe, 7))
     f_ = symbol(string(f, "_"))
     @eval begin
         function $f_{T}(socket::Socket, filter::Ptr{T}, len::Integer)
             rc = ccall((:zmq_setsockopt, zmq), Cint,
                        (Ptr{Void}, Cint, Ptr{T}, Uint),
                        socket.data, $k, filter, len)
-            if rc != 0
+            if rc != zero(Cint)
                 throw(StateError(jl_zmq_error_str()))
             end
         end
-        $f(socket::Socket, filter::Union(Array,String)) =
-            $f_(socket, pointer(filter), sizeof(filter))
+        $f(socket::Socket, filter::Array)  = $f_(socket, pointer(filter), sizeof(filter))
+        $f(socket::Socket, filter::String) = $f_(socket, pointer(filter), sizeof(filter))
         $f(socket::Socket) = $f_(socket, C_NULL, 0)
     end
 end
 
 # Raw FD access
-@unix_only fd(socket::Socket) = RawFD(get_fd(socket))
-@windows_only fd(socket::Socket) = WindowsRawSocket(convert(Ptr{Void}, get_fd(socket)))
-wait(socket::Socket; readable=false, writable=false) = wait(fd(socket); readable=readable, writable=writable)
+@unix_only begin
+    fd(socket::Socket) = RawFD(get_fd(socket))
+end
+@windows_only begin
+    fd(socket::Socket) = WindowsRawSocket(convert(Ptr{Void}, get_fd(socket)))
+end
 
+wait(socket::Socket; readable=false, writable=false) = 
+    wait(fd(socket); readable=readable, writable=writable)
 
 # Socket options of string type
-let u8ap = zeros(Uint8, 255), sz = zeros(Uint, 1)
-opslist = {
-    (:set_identity,                :get_identity,                5)
-    (:set_subscribe,               nothing,                      6)
-    (:set_unsubscribe,             nothing,                      7)
+let u8ap = zeros(Uint8, 255), sz = Uint[0]
+    opslist = {
+        (:set_identity,     :get_identity, 5)
+        (:set_subscribe,    nothing,       6)
+        (:set_unsubscribe,  nothing,       7)
     }
-if version.major >= 3
-    opslist = vcat(opslist, {
-    (nothing,                      :get_last_endpoint,          32)
-    (:set_tcp_accept_filter,       nothing,                     38)
-    })
-end
-for (fset, fget, k) in opslist
-    if fset != nothing
-        @eval global ($fset)
-        @eval function ($fset)(socket::Socket, option_val::ByteString)
-            if length(option_val) > 255
-                throw(StateError("option value too large"))
-            end
-            rc = ccall((:zmq_setsockopt, zmq), Cint,
-                       (Ptr{Void}, Cint, Ptr{Uint8}, Uint),
-                       socket.data, $k, option_val, length(option_val))
-            if rc != 0
-                throw(StateError(jl_zmq_error_str()))
-            end
-        end      
-    end
-    if fget != nothing
-        @eval global ($fget)
-        @eval function ($fget)(socket::Socket)
-            ($sz)[1] = length($u8ap)
-            rc = ccall((:zmq_getsockopt, zmq), Cint,
-                       (Ptr{Void}, Cint, Ptr{Uint8}, Ptr{Uint}),
-                       socket.data, $k, $u8ap, $sz)
-            if rc != 0
-                throw(StateError(jl_zmq_error_str()))
-            end
-            return bytestring(convert(Ptr{Uint8}, $u8ap), int(($sz)[1]))
-        end
-    end        
-end
-end  # let
     
+    if version.major >= 3
+        opslist = vcat(opslist, {
+            (nothing,                :get_last_endpoint, 32)
+            (:set_tcp_accept_filter, nothing,            38)
+        })
+    end
 
+    for (fset, fget, k) in opslist
+        if fset != nothing
+            @eval global $fset
+            @eval function ($fset)(socket::Socket, option_val::ByteString)
+                length(option_val) > 255 && throw(StateError("option value too large"))
+                rc = ccall((:zmq_setsockopt, zmq), Cint,
+                           (Ptr{Void}, Cint, Ptr{Uint8}, Uint),
+                           socket.data, $k, option_val, length(option_val))
+                if rc != zero(Cint)
+                    throw(StateError(jl_zmq_error_str()))
+                end
+            end      
+        end
 
+        if fget != nothing
+            @eval global $fget
+            @eval function ($fget)(socket::Socket)
+                ($sz)[1] = length($u8ap)
+                rc = ccall((:zmq_getsockopt, zmq), Cint,
+                           (Ptr{Void}, Cint, Ptr{Uint8}, Ptr{Uint}),
+                           socket.data, $k, $u8ap, $sz)
+                rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
+                return bytestring(convert(Ptr{Uint8}, $u8ap), int(($sz)[1]))
+            end
+        end        
+    end
+end
+    
 function bind(socket::Socket, endpoint::String)
     rc = ccall((:zmq_bind, zmq), Cint, (Ptr{Void}, Ptr{Uint8}), socket.data, endpoint)
-    if rc != 0
+    if rc != zero(Cint)
         throw(StateError(jl_zmq_error_str()))
     end
 end
 
 function connect(socket::Socket, endpoint::String)
-    rc=ccall((:zmq_connect, zmq), Cint, (Ptr{Void}, Ptr{Uint8}), socket.data, endpoint)
-    if rc != 0
+    rc = ccall((:zmq_connect, zmq), Cint, (Ptr{Void}, Ptr{Uint8}), socket.data, endpoint)
+    if rc != zero(Cint)
         throw(StateError(jl_zmq_error_str()))
     end
 end
@@ -332,9 +317,11 @@ end
 # collected.  The gc_protect dictionary is keyed by a uv_async_t* pointer,
 # used in uv_async_send to tell Julia to when zeromq is done with the data.
 const gc_protect = Dict{Ptr{Void},Any}()
+
 # 0.2 compatibility
-gc_protect_cb(work, status) = gc_protect_cb(work)
 gc_protect_cb(work) = pop!(gc_protect, work.handle, nothing)
+gc_protect_cb(work, status) = gc_protect_cb(work)
+
 function gc_protect_handle(obj::Any)
     work = Base.SingleAsyncWork(gc_protect_cb)
     gc_protect[work.handle] = (work,obj)
@@ -343,9 +330,8 @@ end
 
 # Thread-safe zeromq callback when data is freed, passed to zmq_msg_init_data.
 # The hint parameter will be a uv_async_t* pointer.
-function gc_free_fn(data::Ptr{Void}, hint::Ptr{Void})
-    ccall(:uv_async_send,Cint,(Ptr{Void},),hint)
-end
+gc_free_fn(data::Ptr{Void}, hint::Ptr{Void}) = ccall(:uv_async_send, Cint, (Ptr{Void},), hint)
+
 const gc_free_fn_c = cfunction(gc_free_fn, Cint, (Ptr{Void}, Ptr{Void}))
 
 ## Messages ##
@@ -359,24 +345,21 @@ type Message <: AbstractArray{Uint8,1}
     handle::Ptr{Void} # index into gc_protect, if any
 
     # Create an empty message (for receive)
-    function Message()
+    Message() = begin
         zmsg = new()
         zmsg.handle = C_NULL
         rc = ccall((:zmq_msg_init, zmq), Cint, (Ptr{Message},), &zmsg)
-        if rc != 0
-            throw(StateError(jl_zmq_error_str()))
-        end
+        rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
         finalizer(zmsg, close)
         return zmsg
     end
+
     # Create a message with a given buffer size (for send)
-    function Message(len::Integer)
+    Message(len::Integer) = begin
         zmsg = new()
         zmsg.handle = C_NULL
         rc = ccall((:zmq_msg_init_size, zmq), Cint, (Ptr{Message}, Csize_t), &zmsg, len)
-        if rc != 0
-            throw(StateError(jl_zmq_error_str()))
-        end
+        rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
         finalizer(zmsg, close)
         return zmsg
     end
@@ -385,13 +368,13 @@ type Message <: AbstractArray{Uint8,1}
     # data buffer, without making a copy.  The origin parameter should
     # be the Julia object that is the origin of the data, so that
     # we can hold a reference to it until zeromq is done with the buffer.
-    function Message{T}(origin::Any, m::Ptr{T}, len::Integer)
+    Message{T}(origin::Any, m::Ptr{T}, len::Integer) = begin
         zmsg = new()
         zmsg.handle = gc_protect_handle(origin)
-        rc = ccall((:zmq_msg_init_data, zmq), Cint, (Ptr{Message}, Ptr{T}, Csize_t, Ptr{Void}, Ptr{Void}), &zmsg, m, len, gc_free_fn_c, zmsg.handle)
-        if rc != 0
-            throw(StateError(jl_zmq_error_str()))
-        end
+        rc = ccall((:zmq_msg_init_data, zmq), Cint, 
+                   (Ptr{Message}, Ptr{T}, Csize_t, Ptr{Void}, Ptr{Void}), 
+                   &zmsg, m, len, gc_free_fn_c, zmsg.handle)
+        rc != zero(Cint) && throw(StateError(jl_zmq_error_str()))
         finalizer(zmsg, close)
         return zmsg
     end
@@ -399,11 +382,16 @@ type Message <: AbstractArray{Uint8,1}
     # Create a message with a given String or Array as a buffer (for send)
     # (note: now "owns" the buffer ... the Array must not be resized,
     #        or even written to after the message is sent!)
-    Message(m::ByteString) = Message(m, convert(Ptr{Uint8}, m), sizeof(m))
+    Message(m::ByteString) = 
+        Message(m, convert(Ptr{Uint8}, m), sizeof(m))
+    
     Message{T<:ByteString}(p::SubString{T}) = 
-        Message(p, pointer(p.string.data)+p.offset, sizeof(p))
-    Message(a::Array) = Message(a, pointer(a), sizeof(a))
-    function Message(io::IOBuffer)
+        Message(p, convert(Ptr{Uint8}, p.string.data) + p.offset, sizeof(p))
+    
+    Message(a::Array) = 
+        Message(a, pointer(a), sizeof(a))
+    
+    Message(io::IOBuffer) = begin
         if !io.readable || !io.seekable
             error("byte read failed")
         end
@@ -417,19 +405,22 @@ isfreed(m::Message) = haskey(gc_protect, m.handle)
 
 # AbstractArray behaviors:
 similar(a::Message, T, dims::Dims) = Array(T, dims) # ?
-length(zmsg::Message) = int(ccall((:zmq_msg_size, zmq), Csize_t, (Ptr{Message},), &zmsg))
+
+length(zmsg::Message) = 
+    int(ccall((:zmq_msg_size, zmq), Csize_t, (Ptr{Message},), &zmsg))
+
 size(zmsg::Message) = (length(zmsg),)
-convert(::Type{Ptr{Uint8}}, zmsg::Message) = ccall((:zmq_msg_data, zmq), Ptr{Uint8}, (Ptr{Message},), &zmsg)
+
+convert(::Type{Ptr{Uint8}}, zmsg::Message) = 
+    ccall((:zmq_msg_data, zmq), Ptr{Uint8}, (Ptr{Message},), &zmsg)
+
 function getindex(a::Message, i::Integer)
-    if i < 1 || i > length(a)
-        throw(BoundsError())
-    end
-    unsafe_load(pointer(a), i)
+    (i < 1 || i > length(a)) && throw(BoundsError())
+    return unsafe_load(pointer(a), i)
 end
+
 function setindex!(a::Message, v, i::Integer)
-    if i < 1 || i > length(a)
-        throw(BoundsError())
-    end
+    (i < 1 || i > length(a)) && throw(BoundsError())
     unsafe_store(pointer(a), v, i)
 end
 
@@ -443,30 +434,30 @@ function convert(::Type{IOStream}, zmsg::Message)
     write(s, zmsg)
     return s
 end
+
 # Close a message. You should not need to call this manually (let the
 # finalizer do it).
 function close(zmsg::Message)
     rc = ccall((:zmq_msg_close, zmq), Cint, (Ptr{Message},), &zmsg)
-    if rc != 0
+    if rc != zero(Cint)
         throw(StateError(jl_zmq_error_str()))
     end
 end
 
 @v3only begin
-function get(zmsg::Message, property::Integer)
-    val = ccall((:zmq_msg_get, zmq), Cint, (Ptr{Message}, Cint), &zmsg, property)
-    if val < 0
-        throw(StateError(jl_zmq_error_str()))
+    function get(zmsg::Message, property::Integer)
+        val = ccall((:zmq_msg_get, zmq), Cint, (Ptr{Message}, Cint), &zmsg, property)
+        val < zero(Cint) && throw(StateError(jl_zmq_error_str()))
+        return val
     end
-    val
-end
-function set(zmsg::Message, property::Integer, value::Integer)
-    rc = ccall((:zmq_msg_set, zmq), Cint, (Ptr{Message}, Cint, Cint), &zmsg, property, value)
-    if rc < 0
-        throw(StateError(jl_zmq_error_str()))
+
+    function set(zmsg::Message, property::Integer, value::Integer)
+        rc = ccall((:zmq_msg_set, zmq), Cint, (Ptr{Message}, Cint, Cint), &zmsg, property, value)
+        if rc < zero(Cint)
+            throw(StateError(jl_zmq_error_str()))
+        end
     end
-end
-end # end v3only
+end 
 
 ## Send/receive messages
 #
@@ -477,32 +468,31 @@ end # end v3only
 #   zmsg = recv(socket)
 
 #Send/Recv Options
-const NOBLOCK = 1 # deprecated old name for DONTWAIT in ZMQ v2
+const NOBLOCK  = 1 # deprecated old name for DONTWAIT in ZMQ v2
 const DONTWAIT = 1
-const SNDMORE = 2
+const SNDMORE  = 2
 
 @v2only begin
-function send(socket::Socket, zmsg::Message, flag=int32(0))
-    rc = ccall((:zmq_send, zmq), Cint, (Ptr{Void}, Ptr{Message}, Cint),
-               socket.data, &zmsg, flag)
-    if rc != 0
-        throw(StateError(jl_zmq_error_str()))
+    function send(socket::Socket, zmsg::Message, flag=zero(Int32))
+        rc = ccall((:zmq_send, zmq), Cint, (Ptr{Void}, Ptr{Message}, Cint),
+                   socket.data, &zmsg, flag)
+        if rc != zero(Cint)
+            throw(StateError(jl_zmq_error_str()))
+        end
     end
-end
-end # end v2only
-
+end 
 @v3only begin
-function send(socket::Socket, zmsg::Message, flag=int32(0))
-    if (get_events(socket) & POLLOUT) == 0
-        wait(socket; writable = true)
+    function send(socket::Socket, zmsg::Message, flag=int32(0))
+        if (get_events(socket) & POLLOUT) == 0
+            wait(socket; writable = true)
+        end
+        rc = ccall((:zmq_msg_send, zmq), Cint, (Ptr{Void}, Ptr{Message}, Cint),
+                    &zmsg, socket.data, flag)
+        if rc == int32(-1)
+            throw(StateError(jl_zmq_error_str()))
+        end
     end
-    rc = ccall((:zmq_msg_send, zmq), Cint, (Ptr{Void}, Ptr{Message}, Cint),
-                &zmsg, socket.data, flag)
-    if rc == -1
-        throw(StateError(jl_zmq_error_str()))
-    end
-end
-end # end v3only
+end 
 
 # strings are immutable, so we can send them zero-copy by default
 send(socket::Socket, msg::String, flag=int32(0)) = send(socket, Message(msg), flag)
@@ -519,46 +509,45 @@ function send(f::Function, socket::Socket, flag=int32(0))
 end
 
 @v2only begin
-function recv(socket::Socket)
-    zmsg = Message()
-    while true
-        rc = ccall((:zmq_recv, zmq), Cint, (Ptr{Void}, Ptr{Message},  Cint),
-                    socket.data, &zmsg, NOBLOCK)
-        if rc != 0
-            if errno() == Base.EAGAIN
-                while (get_events(socket) & POLLIN) == 0
-                    wait(socket; readable = true)
-                end
-                continue
-            end 
-            throw(StateError(jl_zmq_error_str()))
+    function recv(socket::Socket)
+        zmsg = Message()
+        while true
+            rc = ccall((:zmq_recv, zmq), Cint, (Ptr{Void}, Ptr{Message},  Cint),
+                        socket.data, &zmsg, NOBLOCK)
+            if rc != zero(Cint)
+                if errno() == Base.EAGAIN
+                    while (get_events(socket) & POLLIN) == 0
+                        wait(socket; readable = true)
+                    end
+                    continue
+                end 
+                throw(StateError(jl_zmq_error_str()))
+            end
+            break
         end
-        break
+        return zmsg
     end
-    return zmsg
-end
-end # end v2only
-
+end 
 @v3only begin
-function recv(socket::Socket)
-    zmsg = Message()
-    while true
-        rc = ccall((:zmq_msg_recv, zmq), Cint, (Ptr{Message}, Ptr{Void}, Cint),
-                    &zmsg, socket.data, NOBLOCK)
-        if rc == -1
-            if errno() == Base.EAGAIN
-                while (get_events(socket) & POLLIN) == 0
-                    wait(socket; readable = true)
-                end
-                continue
-            end 
-            throw(StateError(jl_zmq_error_str()))
+    function recv(socket::Socket)
+        zmsg = Message()
+        while true
+            rc = ccall((:zmq_msg_recv, zmq), Cint, (Ptr{Message}, Ptr{Void}, Cint),
+                        &zmsg, socket.data, NOBLOCK)
+            if rc == int32(-1)
+                if errno() == Base.EAGAIN
+                    while (get_events(socket) & POLLIN) == 0
+                        wait(socket; readable = true)
+                    end
+                    continue
+                end 
+                throw(StateError(jl_zmq_error_str()))
+            end
+            break
         end
-        break
+        return zmsg
     end
-    return zmsg
-end
-end # end v3only
+end 
 
 ## Constants
 
