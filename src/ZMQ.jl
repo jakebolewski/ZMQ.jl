@@ -3,7 +3,7 @@ module ZMQ
 
 include("../deps/deps.jl")
 
-import Base: convert, get, bytestring, length, size, stride, 
+import Base: convert, get, bytestring, length, size, stride, show,
              similar, getindex, setindex!, fd, wait, close, connect
 
 # Julia 0.2 does not define these (avoid warning for import)
@@ -31,7 +31,7 @@ type StateError <: Exception
     msg::String
 end
 
-show(io, thiserr::StateError) = print(io, "ZMQ: ", thiserr.msg)
+show(io::IO, thiserr::StateError) = print(io, "ZMQ.StateError(\"$(thiserr.msg)\")")
 
 # Basic functions
 function jl_zmq_error_str()
@@ -55,12 +55,12 @@ macro v3only(ex)
 end
 
 ## Sockets ##
-type Socket
+type Socket{T}
     data::Ptr{Void}
-
+    
     # ctx should be ::Context, but forward type references are not allowed
-    Socket(ctx, typ::Integer) = begin
-        p = ccall((:zmq_socket, zmq), Ptr{Void}, (Ptr{Void}, Cint), ctx.data, typ)
+    Socket(ctx) = begin
+        p = ccall((:zmq_socket, zmq), Ptr{Void}, (Ptr{Void}, Cint), ctx.data, T)
         p == C_NULL && throw(StateError(jl_zmq_error_str()))
         socket = new(p)
         finalizer(socket, close)
@@ -68,6 +68,7 @@ type Socket
         return socket
     end
 end
+Socket(ctx, typ::Integer) = Socket{int(typ)}(ctx)
 
 function close(socket::Socket)
     if socket.data != C_NULL
@@ -77,6 +78,11 @@ function close(socket::Socket)
     end
 end
 
+show(io::IO, s::Socket) = begin
+    typ = _socket_type_map[get_type(s)]
+    ptr_addr = "0x$(hex(unsigned(s.data), WORD_SIZE>>2))"
+    print(io, "ZMQ.Socket{$typ}(@$ptr_addr)")
+end
 
 ## Contexts ##
 # Provide the same constructor API for version 2 and version 3, even
@@ -98,6 +104,11 @@ type Context
     end
 end
 Context() = Context(1)
+
+show(io::IO, ctx::Context) = begin
+    ptr_addr = "0x$(hex(unsigned(ctx.data), WORD_SIZE>>2))"
+    print(io, "ZMQ.Context(@$ptr_addr)")
+end
 
 function close(ctx::Context)
     if ctx.data != C_NULL # don't close twice!
@@ -572,6 +583,17 @@ const XREP = ROUTER
 const UPSTREAM = PULL      
 const DOWNSTREAM = PUSH    
 
+const _socket_type_map = [PAIR   => :PAIR,
+                          PUB    => :PUB,
+                          SUB    => :SUB,
+                          REQ    => :REQ,
+                          REP    => :REP,
+                          DEALER => :DEALER,
+                          ROUTER => :ROUTER,
+                          PULL   => :PULL,
+                          PUSH   => :PUSH, 
+                          XPUB   => :XPUB,
+                          XSUB   => :XSUB]
 #Message options
 const MORE = 1
 
