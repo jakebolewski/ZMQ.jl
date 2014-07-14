@@ -45,7 +45,7 @@ ZMQ.connect(s2, "tcp://localhost:5555")
 ZMQ.send(s2, Message("test request"))
 @test (bytestring(ZMQ.recv(s1)) == "test request")
 
-ZMQ.send(s1, Message("test response"))
+ZMQ.send(s1, msg"test response")
 @test (bytestring(ZMQ.recv(s2)) == "test response")
 
 # Test task-blocking behavior
@@ -55,7 +55,7 @@ msg_sent = false
 	global msg_sent
 	sleep(0.5)
 	msg_sent = true
-	ZMQ.send(s2, Message("test request"))
+	ZMQ.send(s2, msg"test request")
 	@test (bytestring(ZMQ.recv(s2)) == "test response")
 	notify(c)
 end
@@ -64,10 +64,10 @@ end
 # we'll never switch to the other task
 @test (bytestring(ZMQ.recv(s1)) == "test request")
 @test msg_sent == true
-ZMQ.send(s1, Message("test response"))
+ZMQ.send(s1, msg"test response")
 wait(c)
 
-ZMQ.send(s2, Message("another test request"))
+ZMQ.send(s2, msg"another test request")
 msg = ZMQ.recv(s1)
 o = convert(IOStream, msg); seek(o, 0)
 @test (takebuf_string(o)=="another test request")

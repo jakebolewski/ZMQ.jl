@@ -16,6 +16,8 @@ export bind, send, recv
 export 
     # Types
     StateError, Context, Socket, Message,
+    # Macros
+    @msg_str, 
     # Functions
     set, subscribe, unsubscribe,
     # Constants
@@ -408,6 +410,10 @@ type Message <: AbstractArray{Uint8,1}
         end
         Message(io.data)
     end
+end
+
+macro msg_str(str::String)
+    Message(str)
 end
 
 # check whether zeromq has called our free-function, i.e. whether
