@@ -14,7 +14,7 @@ ZMQ.close(ctx)
 
 ctx2 = Context(1)
 s = Socket(ctx2, PUB)
-@test typeof(s) == Socket
+@test typeof(s) == Socket{PUB}
 ZMQ.close(s)
 
 s1 = Socket(ctx2, REP)
