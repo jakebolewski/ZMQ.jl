@@ -3,17 +3,26 @@ compiler:
     - gcc
 notifications:
     email: false
+
 env:
     matrix: 
         - JULIAVERSION="juliareleases" 
         - JULIAVERSION="julianightlies" 
+
 before_install:
     - sudo add-apt-repository ppa:staticfloat/julia-deps -y
     - sudo add-apt-repository ppa:staticfloat/${JULIAVERSION} -y
     - sudo apt-get update -qq -y
     - sudo apt-get install libpcre3-dev julia -y
+
 script:
     - julia -e 'Pkg.init(); run(`ln -s $(pwd()) $(Pkg.dir())/ZMQ`); Pkg.resolve()'
     - julia -e 'versioninfo(); Pkg.build("ZMQ");'
     - julia -e 'using ZMQ; @assert isdefined(:ZMQ); @assert typeof(ZMQ) === Module'
-    - julia test/runtests.jl
+    - julia --code-coverage test/runtests.jl
+
+after_success:
+    - julia -e 'cd(Pkg.dir("ZMQ")); 
+                Pkg.add("Coverage"); 
+                using Coverage; 
+                Coveralls.submit(Coveralls.process_folder())'
