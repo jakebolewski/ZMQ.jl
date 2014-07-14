@@ -77,6 +77,7 @@ function close(socket::Socket)
     end
 end
 
+show(io::IO, s::Socket) = print(io, "ZMQ.Socket($(s.data))")
 
 ## Contexts ##
 # Provide the same constructor API for version 2 and version 3, even
@@ -98,6 +99,8 @@ type Context
     end
 end
 Context() = Context(1)
+
+show(io::IO, ctx::Context) = print(io, "ZMQ.Context($(s.data))")
 
 function close(ctx::Context)
     if ctx.data != C_NULL # don't close twice!
@@ -398,6 +401,8 @@ type Message <: AbstractArray{Uint8,1}
         Message(io.data)
     end
 end
+
+show(io::IO, msg::Message) = print(io, "ZMQ.Message($(msg.handle))")
 
 # check whether zeromq has called our free-function, i.e. whether
 # we are save to reclaim ownership of any buffer object
