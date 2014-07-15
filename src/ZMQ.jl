@@ -131,6 +131,16 @@ function close(ctx::Context)
     end
 end
 
+with_ctx(f::Function, n::Integer) = begin
+    ctx = ZMQ.Context(n)
+    try
+        f(ctx)
+    finally
+        close(ctx)
+    end
+end
+with_ctx(f::Function) = with_ctx(f, 1)
+
 term(ctx::Context) = close(ctx)
 
 @v3only begin
