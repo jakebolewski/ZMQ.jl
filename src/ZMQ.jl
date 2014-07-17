@@ -396,8 +396,8 @@ type Message <: AbstractArray{Uint8,1}
     Message{T<:ByteString}(p::SubString{T}) = 
         Message(p, convert(Ptr{Uint8}, p.string.data) + p.offset, sizeof(p))
     
-    Message(a::Array) = 
-        Message(a, pointer(a), sizeof(a))
+    Message{T}(a::Array{T}) = 
+        Message(a, convert(Ptr{T}, a), sizeof(a))
     
     Message(io::IOBuffer) = begin
         if !io.readable || !io.seekable
