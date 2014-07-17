@@ -259,8 +259,8 @@ for (f,k) in ((:subscribe, 6), (:unsubscribe, 7))
                          (Ptr{Void}, Cint, Ptr{T}, Uint),
                          socket.data, $k, filter, len)
         end
-        $f(socket::Socket, filter::Array)  = $f_(socket, pointer(filter), sizeof(filter))
-        $f(socket::Socket, filter::String) = $f_(socket, pointer(filter), sizeof(filter))
+        $f{T}(socket::Socket, filter::Array{T}) = $f_(socket, convert(Ptr{T}, filter), sizeof(filter))
+        $f(socket::Socket, filter::String) = $f_(socket, filter.data)
         $f(socket::Socket) = $f_(socket, C_NULL, 0)
     end
 end
